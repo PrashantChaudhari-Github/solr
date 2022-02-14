@@ -450,21 +450,12 @@ public final class SchemaField extends FieldProperties implements IndexableField
 
   @Override
   public int vectorDimension() {
-//    return 0;
-    /*right now it's hardcoded, need to change in future*/
-    if(type instanceof VectorFieldType) { 
-      return 10;
-    } else
     return 0;
   }
 
   @Override
   public VectorSimilarityFunction vectorSimilarityFunction() {
-//    return VectorSimilarityFunction.EUCLIDEAN;
-    if(type instanceof VectorFieldType) {
-      return VectorSimilarityFunction.DOT_PRODUCT;
-      } else
-    return null;
+    return VectorSimilarityFunction.EUCLIDEAN;
   }
 
   @Override
