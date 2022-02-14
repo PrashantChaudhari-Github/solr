@@ -213,19 +213,6 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
     }
 
     try {
-
-          TopDocs docs = null;
-          if(query instanceof VectorQuery)
-          {
-            float vector[] = ((VectorQuery)query).getSearchVector().getVector();
-            String field = ((VectorQuery)query).getSearchVector().field();
-
-            int topK = 10;
-            // int topK = ((VectorQuery)query).getTopK();
-
-            docs = doKnnSearch(reader, field, vector, topK, null);  
-          }
-          
       super.search(query, collector);
     } catch (TimeLimitingCollector.TimeExceededException | ExitableDirectoryReader.ExitingReaderException |
             CancellableCollector.QueryCancelledException x) {
@@ -1561,7 +1548,7 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
     final int lastDocRequested = last;
     int nDocsReturned;
     int totalHits;
-    float maxScore;
+    float maxScore = 0.0f;
     int[] ids;
     float[] scores;
 
@@ -1624,38 +1611,67 @@ public class SolrIndexSearcher extends IndexSearcher implements Closeable, SolrI
       qr.setNextCursorMark(cmd.getCursorMark());
       hitsRelation = Relation.EQUAL_TO;
     } else {
-      final TopDocsCollector<?> topCollector = buildTopDocsCollector(len, cmd);
-      MaxScoreCollector maxScoreCollector = null;
-      Collector collector = topCollector;
-      if ((cmd.getFlags() & GET_SCORES) != 0) {
-        maxScoreCollector = new MaxScoreCollector();
-        collector = MultiCollector.wrap(topCollector, maxScoreCollector);
-      }
-      ScoreMode scoreModeUsed = buildAndRunCollectorChain(qr, query, collector, cmd, pf.postFilter).scoreMode();
+      if(query instanceof VectorQuery) {
+        TopDocs topDocs = null;
+        float vector[] = ((VectorQuery)query).getSearchVector().getVector();
+        String field = ((VectorQuery)query).getSearchVector().field();
 
-      totalHits = topCollector.getTotalHits();
-      TopDocs topDocs = topCollector.topDocs(0, len);
-      if (scoreModeUsed == ScoreMode.COMPLETE || scoreModeUsed == ScoreMode.COMPLETE_NO_SCORES) {
-        hitsRelation = TotalHits.Relation.EQUAL_TO;
-      } else {
+        int topK = 10;
+        // int topK = ((VectorQuery)query).getTopK();
+
+        topDocs = doKnnSearch(reader, field, vector, topK, null); 
+        totalHits = (int)topDocs.totalHits.value;
         hitsRelation = topDocs.totalHits.relation;
-      }
-      if (cmd.getSort() != null && cmd.getQuery() instanceof RankQuery == false && (cmd.getFlags() & GET_SCORES) != 0) {
-        TopFieldCollector.populateScores(topDocs.scoreDocs, this, query);
-      }
-      populateNextCursorMarkFromTopDocs(qr, cmd, topDocs);
 
-      maxScore = totalHits > 0 ? (maxScoreCollector == null ? Float.NaN : maxScoreCollector.getMaxScore()) : 0.0f;
-      nDocsReturned = topDocs.scoreDocs.length;
-      ids = new int[nDocsReturned];
-      scores = (cmd.getFlags() & GET_SCORES) != 0 ? new float[nDocsReturned] : null;
-      for (int i = 0; i < nDocsReturned; i++) {
-        ScoreDoc scoreDoc = topDocs.scoreDocs[i];
-        ids[i] = scoreDoc.doc;
-        if (scores != null) scores[i] = scoreDoc.score;
+        if (cmd.getSort() != null && cmd.getQuery() instanceof RankQuery == false && (cmd.getFlags() & GET_SCORES) != 0) {
+          TopFieldCollector.populateScores(topDocs.scoreDocs, this, query);
+        }
+        populateNextCursorMarkFromTopDocs(qr, cmd, topDocs);
+  
+        nDocsReturned = topDocs.scoreDocs.length;
+        ids = new int[nDocsReturned];
+        scores = (cmd.getFlags() & GET_SCORES) != 0 ? new float[nDocsReturned] : null;
+        for (int i = 0; i < nDocsReturned; i++) {
+          ScoreDoc scoreDoc = topDocs.scoreDocs[i];
+          ids[i] = scoreDoc.doc;
+          if(scoreDoc.score > maxScore) maxScore = scoreDoc.score;
+          if (scores != null) scores[i] = scoreDoc.score;
+        }
+        
+      }
+      else {
+        final TopDocsCollector<?> topCollector = buildTopDocsCollector(len, cmd);
+        MaxScoreCollector maxScoreCollector = null;
+        Collector collector = topCollector;
+        if ((cmd.getFlags() & GET_SCORES) != 0) {
+          maxScoreCollector = new MaxScoreCollector();
+          collector = MultiCollector.wrap(topCollector, maxScoreCollector);
+        }
+        ScoreMode scoreModeUsed = buildAndRunCollectorChain(qr, query, collector, cmd, pf.postFilter).scoreMode();
+  
+        totalHits = topCollector.getTotalHits();
+        TopDocs topDocs = topCollector.topDocs(0, len);
+        if (scoreModeUsed == ScoreMode.COMPLETE || scoreModeUsed == ScoreMode.COMPLETE_NO_SCORES) {
+          hitsRelation = TotalHits.Relation.EQUAL_TO;
+        } else {
+          hitsRelation = topDocs.totalHits.relation;
+        }
+        if (cmd.getSort() != null && cmd.getQuery() instanceof RankQuery == false && (cmd.getFlags() & GET_SCORES) != 0) {
+          TopFieldCollector.populateScores(topDocs.scoreDocs, this, query);
+        }
+        populateNextCursorMarkFromTopDocs(qr, cmd, topDocs);
+  
+        maxScore = totalHits > 0 ? (maxScoreCollector == null ? Float.NaN : maxScoreCollector.getMaxScore()) : 0.0f;
+        nDocsReturned = topDocs.scoreDocs.length;
+        ids = new int[nDocsReturned];
+        scores = (cmd.getFlags() & GET_SCORES) != 0 ? new float[nDocsReturned] : null;
+        for (int i = 0; i < nDocsReturned; i++) {
+          ScoreDoc scoreDoc = topDocs.scoreDocs[i];
+          ids[i] = scoreDoc.doc;
+          if (scores != null) scores[i] = scoreDoc.score;
+        }
       }
     }
-
     int sliceLen = Math.min(lastDocRequested, nDocsReturned);
     if (sliceLen < 0) sliceLen = 0;
     qr.setDocList(new DocSlice(0, sliceLen, ids, scores, totalHits, maxScore, hitsRelation));
